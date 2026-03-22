@@ -1,0 +1,28 @@
+# Kernel module build artifacts
+*.o
+*.ko
+*.ko.cmd
+*.mod
+*.mod.c
+*.mod.cmd
+*.symvers
+*.order
+.tmp_versions/
+.cache.mk
+Module.symvers
+modules.order
+
+# Userspace binary
+pcie_access
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
