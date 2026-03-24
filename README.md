@@ -16,7 +16,7 @@
 
 ```bash
 make
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678
 ./pcie_access 03:00.0 0 0x0 d       # read device ID register
 ```
 
@@ -24,7 +24,7 @@ sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678
 
 This project provides:
 
-1. **Kernel driver** (`pcie_stub.ko`) — a generic PCI driver that binds to any
+1. **Kernel driver** (`pcie_access_drv.ko`) — a generic PCI driver that binds to any
    device (specified at load time or via sysfs), maps memory BARs using
    `pcim_iomap()`, and exposes a `miscdevice` per PCI function for MMIO
    reads/writes via ioctl. Optionally monitors MSI-X, MSI, or legacy INTx
@@ -44,8 +44,18 @@ pcie_access/
 ├── pcie_stub.c              # Kernel driver (~500 lines)
 ├── pcie_access.c            # Userspace CLI tool
 ├── pcie_ioctl.h             # Shared ioctl ABI header (kernel + userspace)
-├── Makefile                 # Builds both kernel module and userspace tool
-├── dkms.conf                # DKMS config for persistent module installation
+├── Makefile                 # Builds kernel module, userspace tool, and .deb packages
+├── dkms.conf                # DKMS config for manual persistent installation
+├── debian/                  # Debian packaging
+│   ├── control              # Package metadata (pcie-stub-dkms + pcie-access)
+│   ├── rules                # Build rules
+│   ├── changelog            # Version history
+│   ├── copyright            # License (GPL-2.0)
+│   ├── pcie-stub-dkms.dkms  # DKMS config template
+│   ├── pcie-stub-dkms.install
+│   ├── pcie-access.install
+│   ├── compat               # Debhelper compat level
+│   └── source/format
 ├── scripts/
 │   └── pcie_bind.sh         # Helper script to bind/unbind PCI devices
 ├── LICENSE                  # GPL-2.0
@@ -75,28 +85,28 @@ Specify the target PCI device by Vendor ID and Device ID at module load time:
 
 ```bash
 # Basic: MMIO access only, no interrupts
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678
 
 # With interrupt monitoring (auto-detect best IRQ type)
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678 irq_mode=1
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678 irq_mode=1
 
 # Force MSI-X with up to 8 vectors
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678 irq_mode=2 max_vectors=8
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678 irq_mode=2 max_vectors=8
 
 # Force MSI (single vector)
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678 irq_mode=3
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678 irq_mode=3
 
 # Force legacy INTx (see limitations below)
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678 irq_mode=4
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678 irq_mode=4
 
 # Force bus mastering without interrupts (for DMA-capable devices)
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678 set_master=1
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678 set_master=1
 ```
 
 ### Dynamic binding (no vid/device_id at load time)
 
 ```bash
-sudo insmod pcie_stub.ko
+sudo insmod pcie_access_drv.ko
 
 # Add a device ID at runtime
 echo "1234 5678" | sudo tee /sys/bus/pci/drivers/pcie_access/new_id
@@ -161,6 +171,61 @@ asserts it. **For reliable interrupt monitoring, prefer MSI or MSI-X**
 dmesg -w | grep pcie_stub
 ```
 
+### AER error handling & DPC
+
+The driver implements PCIe **AER (Advanced Error Reporting)** error recovery
+handlers, enabling validation of error handling, **DPC (Downstream Port
+Containment)**, and hot-plug recovery on real hardware.
+
+When the kernel's AER/DPC subsystem detects an error on the PCIe link, it
+calls the driver's error recovery callbacks. All events are logged to dmesg:
+
+```
+pcie_stub 0000:03:00.0: AER: error_detected — state=io_frozen (2)
+pcie_stub 0000:03:00.0: AER: slot_reset — re-enabling device
+pcie_stub 0000:03:00.0: AER: resume — device recovered
+```
+
+**Recovery flow:**
+
+| Callback | When called | Driver action |
+|----------|-------------|---------------|
+| `error_detected` (io_normal) | Correctable error | Log only, return `CAN_RECOVER` |
+| `error_detected` (io_frozen) | Non-fatal uncorrectable | Set `in_error_recovery`, ioctls return `-EIO`, request slot reset |
+| `error_detected` (io_perm_failure) | Fatal error | Mark device `dead`, ioctls return `-ENODEV` |
+| `slot_reset` | After link/FLR reset | Re-enable device, restore PCI state |
+| `resume` | Recovery complete | Clear `in_error_recovery`, ioctls resume |
+
+**Testing AER with `aer-inject`:**
+
+```bash
+# Install aer-inject (available in most distros)
+sudo apt install aer-inject    # Debian
+sudo dnf install aer-inject    # Fedora
+
+# Inject a correctable error
+echo "AER 0000:03:00.0 cor_status RCVR" | sudo tee /dev/aer_inject
+
+# Inject a non-fatal uncorrectable error (triggers io_frozen → slot_reset → resume)
+echo "AER 0000:03:00.0 uncor_status POISON_TLP" | sudo tee /dev/aer_inject
+
+# Monitor recovery
+dmesg -w | grep -E "pcie_stub|AER|DPC"
+```
+
+**DPC (Downstream Port Containment):** DPC is handled by the kernel's
+`pciehp`/`dpc` drivers at the port level. When DPC triggers (e.g., due to
+a fatal error on the link), the kernel freezes I/O and calls our
+`error_detected(io_frozen)` callback. After the link recovers, `slot_reset`
+and `resume` are called. This allows validating that your device's DPC
+implementation works end-to-end.
+
+**Kernel requirements for AER/DPC:**
+- `CONFIG_PCIEAER` — PCIe Advanced Error Reporting
+- `CONFIG_PCIE_DPC` — Downstream Port Containment (optional)
+- `CONFIG_PCIEPORTBUS` — PCIe Port Bus driver
+- BIOS/firmware must not disable AER (check with `dmesg | grep AER`)
+
 ### Security
 
 The driver checks for `CAP_SYS_RAWIO` on `open()`. If the calling process
@@ -185,7 +250,7 @@ file descriptors:
 ### Unloading
 
 ```bash
-sudo rmmod pcie_stub
+sudo rmmod pcie_access_drv
 ```
 
 ## Userspace Tool
@@ -294,7 +359,7 @@ compatibility.
   │  /dev/pcie_ctrl-DDDD:BB:DD.F             │  misc char device
   │  (miscdevice, one per PCI function)      │
   ├──────────────────────────────────────────┤
-  │  pcie_stub.ko                            │
+  │  pcie_access_drv.ko                      │
   │                                          │
   │  ┌─ Lifecycle ────────────────────────┐  │
   │  │ kref refcount (safe hot-unplug)    │  │
@@ -323,9 +388,58 @@ compatibility.
   └──────────────────────────────────────────┘
 ```
 
-## Why not UIO or VFIO?
+## Why not pcimem, UIO, or VFIO?
 
-A fair question. The kernel provides `uio_pci_generic` and `vfio-pci` for
+A fair question. There are existing tools and frameworks for userspace
+device access. Here's why this driver takes a different approach, and
+when each tool is the right choice.
+
+### Why not pcimem?
+
+[pcimem](https://github.com/billfarrow/pcimem) is a popular lightweight
+tool that `mmap()`s `/sys/bus/pci/devices/.../resourceN` directly from
+userspace — no kernel driver needed. It's elegant in its simplicity, but
+the mmap approach has fundamental trade-offs for hardware validation:
+
+| | `pcie_stub` + `pcie_access` (this) | `pcimem` (mmap-based) |
+|---|---|---|
+| **Kernel driver** | Yes (out-of-tree module) | No (uses sysfs resourceN) |
+| **Access mechanism** | ioctl per access (syscall) | mmap + pointer dereference |
+| **Access width control** | **Kernel-enforced** 1/2/4/8 bytes | Userspace cast — compiler/CPU decides |
+| **Deterministic behavior** | Each access is a single `ioread`/`iowrite` call with defined semantics | Compiler may optimize, reorder, or split accesses |
+| **Alignment enforcement** | Kernel rejects unaligned accesses | Silent undefined behavior |
+| **Bounds checking** | Kernel checks offset vs BAR length | Can access beyond intended range |
+| **Audit trail** | `dev_dbg` per access (dyndbg) | None |
+| **Interrupt monitoring** | MSI-X/MSI/INTx with logging | Not possible |
+| **Hot-unplug safety** | kref + rw_semaphore | Process crash / SIGBUS |
+| **Performance** | ~1µs per access (syscall overhead) | ~10ns per access (direct memory) |
+| **Setup complexity** | `insmod` + bind device | Zero (sysfs always available) |
+
+**The key design decision:** For hardware validation and FPGA bring-up,
+**deterministic, auditable, single-access behavior** matters more than raw
+speed. When you're debugging a register that returns different values on
+consecutive reads, you need to know that each read is exactly the width
+you requested, naturally aligned, and logged — not subject to compiler
+optimizations, speculative execution, or store-buffer coalescing.
+
+The ioctl approach guarantees:
+- **One `ioread*()` call per request** — the kernel's MMIO accessors use
+  `volatile` semantics and appropriate memory barriers
+- **Exact access width** — if you ask for a byte read, you get `ioread8()`,
+  not a dword read with a byte extract
+- **No compiler interference** — `ioread`/`iowrite` are opaque to the
+  compiler; it cannot optimize, reorder, or eliminate them
+- **Kernel-enforced validation** — alignment, bounds, and reserved-field
+  checks happen before any hardware access
+
+**When to use pcimem instead:** If you need maximum throughput (millions of
+accesses per second), don't care about per-access logging, and trust your
+C code to do the right `volatile` casts — pcimem with mmap is faster and
+requires no kernel module. It's a great tool for a different use case.
+
+### Why not UIO or VFIO?
+
+The kernel also provides `uio_pci_generic` and `vfio-pci` for
 userspace device access. Here's why this stub driver is the better fit for
 **hardware evaluation and early bring-up**:
 
@@ -379,10 +493,10 @@ With `uio_pci_generic`:
 # 6. Compile and run
 ```
 
-With `pcie_stub`:
+With `pcie_access`:
 ```bash
 make
-sudo insmod pcie_stub.ko vid=0x1234 device_id=0x5678
+sudo insmod pcie_access_drv.ko vid=0x1234 device_id=0x5678
 ./pcie_access 03:00.0 0 0x100 d
 ```
 
@@ -415,16 +529,79 @@ For persistent installation across kernel updates using
 
 ```bash
 # Copy source to DKMS tree
-sudo mkdir -p /usr/src/pcie_stub-0.2
-sudo cp pcie_stub.c pcie_ioctl.h Makefile dkms.conf /usr/src/pcie_stub-0.2/
+sudo mkdir -p /usr/src/pcie_access_drv-0.2
+sudo cp pcie_stub.c pcie_ioctl.h Makefile dkms.conf /usr/src/pcie_access_drv-0.2/
 
 # Add, build, and install
-sudo dkms add pcie_stub/0.2
-sudo dkms build pcie_stub/0.2
-sudo dkms install pcie_stub/0.2
+sudo dkms add pcie_access_drv/0.2
+sudo dkms build pcie_access_drv/0.2
+sudo dkms install pcie_access_drv/0.2
 
 # Module is now auto-built on kernel updates
+modinfo pcie_access_drv
+```
+
+## Debian Packages
+
+Build `.deb` packages for distribution via your own Debian repository:
+
+```bash
+# Install build dependencies
+sudo apt install debhelper dkms dpkg-dev
+
+# Build packages (output in parent directory)
+make deb
+
+# Or equivalently:
+dpkg-buildpackage -us -uc -b
+```
+
+This produces **two packages**:
+
+| Package | Arch | Contents |
+|---------|------|----------|
+| `pcie-stub-dkms_0.2_all.deb` | `all` | Kernel module source + DKMS config. Auto-builds for any kernel. |
+| `pcie-access_0.2_amd64.deb` | `amd64` | Userspace CLI tool + helper script in `/usr/bin/` |
+
+### Installing
+
+```bash
+# Install both packages
+sudo dpkg -i ../pcie-stub-dkms_0.2_all.deb ../pcie-access_0.2_amd64.deb
+
+# DKMS automatically builds the module for your current kernel:
+#   dkms: running auto-install for pcie_stub/0.2
+#   Module pcie_stub/0.2 built for kernel 6.12.54
+
+# Verify
 modinfo pcie_stub
+which pcie_access
+```
+
+### Custom kernel support
+
+The DKMS package works with **any kernel** (stock Debian or custom-compiled)
+as long as the matching kernel headers are installed:
+
+```bash
+# For stock Debian kernel:
+sudo apt install linux-headers-$(uname -r)
+
+# For custom kernel: ensure /lib/modules/$(uname -r)/build points to
+# your kernel source/build tree. DKMS uses this to compile the module.
+```
+
+### Adding to your Debian repository
+
+```bash
+# Sign and add to your repo (example with reprepro)
+dpkg-sig --sign builder ../pcie-stub-dkms_0.2_all.deb
+dpkg-sig --sign builder ../pcie-access_0.2_amd64.deb
+reprepro -b /path/to/repo includedeb bookworm ../pcie-stub-dkms_0.2_all.deb
+reprepro -b /path/to/repo includedeb bookworm ../pcie-access_0.2_amd64.deb
+
+# Users can then install with:
+sudo apt install pcie-stub-dkms pcie-access
 ```
 
 ## Contributing
