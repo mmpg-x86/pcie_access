@@ -23,6 +23,15 @@ pcie_access
 .idea/
 *.code-workspace
 
+# Debian packaging artifacts
+debian/pcie-stub-dkms/
+debian/pcie-access/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+
 # OS
 .DS_Store
 Thumbs.db

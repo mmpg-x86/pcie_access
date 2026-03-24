@@ -1,0 +1,2 @@
+pcie_access usr/bin/
+scripts/pcie_bind.sh usr/bin/

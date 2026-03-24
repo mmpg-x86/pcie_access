@@ -1,0 +1,41 @@
+Source: pcie-access
+Section: kernel
+Priority: optional
+Maintainer: Maciej Grochowski <maciej.grochowski@pm.me>
+Build-Depends: debhelper-compat (= 13), dkms
+Standards-Version: 4.6.2
+Homepage: https://github.com/mmpg-x86/pcie_access
+Rules-Requires-Root: no
+
+Package: pcie-stub-dkms
+Architecture: all
+Depends: dkms, ${misc:Depends}
+Recommends: pcie-access
+Description: Generic PCIe BAR access kernel module (DKMS)
+ Out-of-tree Linux kernel module that binds to any PCI device,
+ maps memory BARs, and exposes a misc character device for MMIO
+ reads/writes via ioctl from userspace.
+ .
+ Features:
+  - Binds to any PCI device (vid/device_id params or sysfs new_id)
+  - Maps up to 6 memory BARs via pcim_iomap()
+  - 8/16/32/64-bit MMIO access with alignment and bounds checking
+  - Optional MSI-X, MSI, and legacy INTx interrupt monitoring
+  - Safe hot-unplug via kref + rw_semaphore
+ .
+ This package uses DKMS to automatically build the kernel module
+ for your installed kernel(s). Works with stock and custom kernels.
+
+Package: pcie-access
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: pcie-stub-dkms
+Description: Userspace CLI tool for PCIe BAR register access
+ Command-line utility that communicates with the pcie_stub kernel
+ driver to perform MMIO reads/writes on PCI device BARs.
+ .
+ Usage: pcie_access [DDDD:]BB:DD.F BAR OFFSET TYPE [DATA]
+ .
+ Supports byte/halfword/dword/qword access widths, full PCI domain
+ addressing, and 64-bit offsets. Includes a helper script for
+ binding/unbinding PCI devices.

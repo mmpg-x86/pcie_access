@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: pcie_access
+Upstream-Contact: Maciej Grochowski <maciej.grochowski@pm.me>
+Source: https://github.com/mmpg-x86/pcie_access
+
+Files: *
+Copyright: 2026 Maciej Grochowski <maciej.grochowski@pm.me>
+License: GPL-2.0
+
+License: GPL-2.0
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License version 2 as
+ published by the Free Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in "/usr/share/common-licenses/GPL-2".
