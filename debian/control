@@ -2,7 +2,7 @@ Source: pcie-access
 Section: kernel
 Priority: optional
 Maintainer: Maciej Grochowski <maciej.grochowski@pm.me>
-Build-Depends: debhelper-compat (= 13), dkms
+Build-Depends: debhelper-compat (= 13), dkms, gcc, libc6-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/mmpg-x86/pcie_access
 Rules-Requires-Root: no
@@ -31,8 +31,9 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: pcie-stub-dkms
 Description: Userspace CLI tool for PCIe BAR register access
- Command-line utility that communicates with the pcie_stub kernel
- driver to perform MMIO reads/writes on PCI device BARs.
+ Command-line utility that communicates with the pcie_access_drv
+ kernel module (PCI driver name 'pcie_access') to perform MMIO
+ reads/writes on PCI device BARs.
  .
  Usage: pcie_access [DDDD:]BB:DD.F BAR OFFSET TYPE [DATA]
  .
