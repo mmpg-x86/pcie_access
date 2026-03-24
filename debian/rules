@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@ --with dkms
+
+override_dh_auto_build:
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -Wall -Wextra -O2 \
+		-o pcie_access pcie_access.c
+
+override_dh_auto_install:
+	# DKMS source files installed via .install file
+	# Userspace tool installed via .install file
+
+override_dh_auto_clean:
+	rm -f pcie_access
+
+# Skip kernel module build during package build — DKMS handles that
+override_dh_dkms:
+	dh_dkms -ppcie-stub-dkms -V 0.2

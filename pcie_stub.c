@@ -9,6 +9,10 @@
  * Optionally registers interrupt handlers (MSI-X, MSI, or legacy INTx)
  * to monitor and log interrupt delivery during hardware evaluation.
  *
+ * Implements PCIe AER (Advanced Error Reporting) error recovery handlers
+ * to validate error handling, Downstream Port Containment (DPC), and
+ * hot-plug behavior of real hardware.
+ *
  * This is a lab/debug tool intended for developers and embedded use.
  * It is NOT intended for production systems.
  *
@@ -25,6 +29,7 @@
 #include <linux/atomic.h>
 #include <linux/kref.h>
 #include <linux/rwsem.h>
+#include <linux/aer.h>
 
 #include "pcie_ioctl.h"
 
@@ -123,6 +128,7 @@ struct pcie_dev {
 	struct kref refcount;
 	struct rw_semaphore rw_sem;
 	bool dead;
+	bool in_error_recovery;	/* set during AER error recovery */
 };
 
 static void pcie_dev_free(struct kref *ref)
@@ -331,6 +337,11 @@ static long pcie_fops_ioctl(struct file *filp, unsigned int cmd,
 	if (pciedev->dead) {
 		up_read(&pciedev->rw_sem);
 		return -ENODEV;
+	}
+
+	if (READ_ONCE(pciedev->in_error_recovery)) {
+		up_read(&pciedev->rw_sem);
+		return -EIO;
 	}
 
 	switch (cmd) {
@@ -555,6 +566,136 @@ err_master:
 }
 
 /* --------------------------------------------------------------------
+ * PCIe AER (Advanced Error Reporting) error recovery
+ *
+ * These callbacks participate in the kernel's PCI error recovery flow.
+ * They allow validating that a device (FPGA, endpoint, etc.) correctly
+ * handles AER errors, DPC (Downstream Port Containment), and link
+ * resets during hardware evaluation.
+ *
+ * The recovery flow is:
+ *   1. error_detected()  — error reported, I/O may be frozen
+ *   2. slot_reset()      — link has been reset (optional, if needed)
+ *   3. resume()          — device can resume normal operation
+ *
+ * All events are logged to dmesg for validation.
+ * During recovery, ioctls return -EIO (in_error_recovery flag).
+ *
+ * Monitor with: dmesg -w | grep pcie_stub
+ * ------------------------------------------------------------------ */
+
+static const char *pci_channel_state_str(pci_channel_state_t state)
+{
+	switch (state) {
+	case pci_channel_io_normal:
+		return "io_normal";
+	case pci_channel_io_frozen:
+		return "io_frozen";
+	case pci_channel_io_perm_failure:
+		return "io_perm_failure";
+	default:
+		return "unknown";
+	}
+}
+
+/*
+ * error_detected — called when the PCI core detects an AER error.
+ *
+ * state:
+ *   pci_channel_io_normal     — correctable error, device still works
+ *   pci_channel_io_frozen     — non-fatal uncorrectable, I/O suspended
+ *   pci_channel_io_perm_failure — fatal, device is gone
+ */
+static pci_ers_result_t pcie_err_detected(struct pci_dev *pdev,
+					  pci_channel_state_t state)
+{
+	struct pcie_dev *pciedev = pci_get_drvdata(pdev);
+
+	dev_err(&pdev->dev,
+		"AER: error_detected — state=%s (%d)\n",
+		pci_channel_state_str(state), state);
+
+	switch (state) {
+	case pci_channel_io_normal:
+		/* Correctable error — no action needed, just log */
+		return PCI_ERS_RESULT_CAN_RECOVER;
+
+	case pci_channel_io_frozen:
+		/*
+		 * Non-fatal uncorrectable error — I/O is frozen.
+		 * Block ioctls and request a slot reset to recover.
+		 */
+		if (pciedev)
+			WRITE_ONCE(pciedev->in_error_recovery, true);
+		return PCI_ERS_RESULT_NEED_RESET;
+
+	case pci_channel_io_perm_failure:
+		/*
+		 * Fatal error — device is permanently broken.
+		 * Mark as dead so ioctls return -ENODEV.
+		 */
+		if (pciedev) {
+			down_write(&pciedev->rw_sem);
+			pciedev->dead = true;
+			up_write(&pciedev->rw_sem);
+		}
+		return PCI_ERS_RESULT_DISCONNECT;
+
+	default:
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+}
+
+/*
+ * slot_reset — called after the PCIe link has been reset.
+ *
+ * This is called after a secondary bus reset (SBR) or function-level
+ * reset (FLR).  The device should be re-initialized.  For this generic
+ * driver, we just re-enable the device and log the event.
+ */
+static pci_ers_result_t pcie_err_slot_reset(struct pci_dev *pdev)
+{
+	int rc;
+
+	dev_info(&pdev->dev, "AER: slot_reset — re-enabling device\n");
+
+	/* Restore config space first, then re-enable based on restored state */
+	pci_restore_state(pdev);
+
+	rc = pci_reenable_device(pdev);
+	if (rc) {
+		dev_err(&pdev->dev,
+			"AER: pci_reenable_device failed: %d\n", rc);
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+
+	if (set_master)
+		pci_set_master(pdev);
+
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+/*
+ * resume — called when the device can resume normal operation after
+ * successful error recovery.
+ */
+static void pcie_err_resume(struct pci_dev *pdev)
+{
+	struct pcie_dev *pciedev = pci_get_drvdata(pdev);
+
+	dev_info(&pdev->dev, "AER: resume — device recovered\n");
+
+	if (pciedev)
+		WRITE_ONCE(pciedev->in_error_recovery, false);
+}
+
+static const struct pci_error_handlers pcie_err_handlers = {
+	.error_detected	= pcie_err_detected,
+	.slot_reset	= pcie_err_slot_reset,
+	.resume		= pcie_err_resume,
+};
+
+/* --------------------------------------------------------------------
  * PCI initialisation & BAR mapping
  * ------------------------------------------------------------------ */
 
@@ -572,6 +713,12 @@ static int pcie_init_pci(struct pcie_dev *pciedev, struct pci_dev *pdev)
 	if (set_master)
 		pci_set_master(pdev);
 
+	/*
+	 * Map all memory BARs.  Note: 64-bit BARs consume two consecutive
+	 * BAR indices (e.g., BAR0+BAR1).  pci_resource_len() returns the
+	 * full size for the first index and 0 for the second, so the loop
+	 * naturally skips the "shadow" half of 64-bit BARs.
+	 */
 	for (i = 0; i < PCIE_NR_BARS; ++i) {
 		unsigned long res_len;
 
@@ -674,6 +821,13 @@ static int pcie_driver_probe(struct pci_dev *pdev,
 		goto err_irqs;
 	}
 
+	/*
+	 * Save the "known good" PCI config state after ALL setup is complete
+	 * (BARs mapped, bus mastering set, IRQs configured).  This is what
+	 * pci_restore_state() restores during AER error recovery.
+	 */
+	pci_save_state(pdev);
+
 	dev_info(&pdev->dev, "Registered as /dev/%s\n", pciedev->misc_name);
 
 	return 0;
@@ -701,6 +855,13 @@ static void pcie_driver_remove(struct pci_dev *pdev)
 	/* New opens are blocked after misc_deregister */
 	misc_deregister(&pciedev->misc);
 	pcie_teardown_irqs(pciedev);
+
+	/* Release BAR regions claimed during probe */
+	for (int i = 0; i < PCIE_NR_BARS; i++) {
+		if (pciedev->bars[i].mmio)
+			pci_release_region(pdev, i);
+	}
+
 	pci_set_drvdata(pdev, NULL);
 
 	dev_info(&pdev->dev, "Unregistered /dev/%s\n", pciedev->misc_name);
@@ -718,6 +879,13 @@ static struct pci_driver pcie_access_pci_driver = {
 	.id_table	= pcie_id_table,
 	.probe		= pcie_driver_probe,
 	.remove		= pcie_driver_remove,
+	.err_handler	= &pcie_err_handlers,
+	/*
+	 * Note: no .suspend/.resume callbacks.  After system suspend (S3/S4),
+	 * MMIO mappings are stale and ioctls will read garbage or fault.
+	 * This is acceptable for a lab/debug tool — reboot or rmmod/insmod
+	 * to re-initialize after resume.
+	 */
 };
 
 /* --------------------------------------------------------------------

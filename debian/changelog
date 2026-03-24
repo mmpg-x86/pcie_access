@@ -1,0 +1,11 @@
+pcie-access (0.2) unstable; urgency=low
+
+  * Initial release.
+  * Generic PCI stub driver for userspace BAR access via ioctl.
+  * Supports MSI-X/MSI/INTx interrupt monitoring.
+  * 64-bit MMIO access on CONFIG_64BIT architectures.
+  * Safe hot-unplug via kref + rw_semaphore.
+  * Miscdevice-based char device per PCI function.
+  * Userspace CLI tool with domain addressing support.
+
+ -- Maciej Grochowski <maciej.grochowski@pm.me>  Sun, 23 Mar 2026 11:30:00 -0700
