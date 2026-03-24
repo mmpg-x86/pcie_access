@@ -210,7 +210,7 @@ static int validate_mmio_access(struct pcie_dev *pciedev,
 
 	/*
 	 * Valid access sizes: 1, 2, 4 bytes on all architectures.
-	 * 8-byte access (ioread64/iowrite64) is only available on 64-bit
+	 * 8-byte access (readq/writeq) is only available on 64-bit
 	 * kernels.  Note: whether 8-byte MMIO results in a single atomic
 	 * PCIe TLP depends on the CPU and platform — x86_64 guarantees
 	 * atomicity, some ARM64 implementations may split into two 32-bit
@@ -265,7 +265,7 @@ static int ioctl_read_mmio(struct pcie_dev *pciedev, void __user *argp)
 		break;
 #ifdef CONFIG_64BIT
 	case 8:
-		access.val = ioread64(addr);
+		access.val = readq(addr);
 		break;
 #endif
 	}
@@ -307,7 +307,7 @@ static int ioctl_write_mmio(struct pcie_dev *pciedev, void __user *argp)
 		break;
 #ifdef CONFIG_64BIT
 	case 8:
-		iowrite64(access.val, addr);
+		writeq(access.val, addr);
 		break;
 #endif
 	}
