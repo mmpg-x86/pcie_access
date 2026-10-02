@@ -210,7 +210,7 @@ echo "AER 0000:03:00.0 cor_status RCVR" | sudo tee /dev/aer_inject
 echo "AER 0000:03:00.0 uncor_status POISON_TLP" | sudo tee /dev/aer_inject
 
 # Monitor recovery
-dmesg -w | grep -E "pcie_stub|AER|DPC"
+dmesg -w | grep -E "pcie_access|AER|DPC"
 ```
 
 **DPC (Downstream Port Containment):** DPC is handled by the kernel's
@@ -570,11 +570,11 @@ This produces **two packages**:
 sudo dpkg -i ../pcie-stub-dkms_0.2_all.deb ../pcie-access_0.2_amd64.deb
 
 # DKMS automatically builds the module for your current kernel:
-#   dkms: running auto-install for pcie_stub/0.2
-#   Module pcie_stub/0.2 built for kernel 6.12.54
+#   dkms: running auto-install for pcie_access_drv/0.2
+#   Module pcie_access_drv/0.2 built for kernel 6.12.54
 
 # Verify
-modinfo pcie_stub
+modinfo pcie_access_drv
 which pcie_access
 ```
 

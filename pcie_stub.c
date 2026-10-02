@@ -29,7 +29,6 @@
 #include <linux/atomic.h>
 #include <linux/kref.h>
 #include <linux/rwsem.h>
-#include <linux/aer.h>
 
 #include "pcie_ioctl.h"
 
@@ -139,7 +138,7 @@ static void pcie_dev_free(struct kref *ref)
 }
 
 /*
- * The id_table starts empty — it is populated dynamically in __init
+ * The id_table starts empty -- it is populated dynamically in __init
  * based on the vid/device_id module parameters.  Additional devices
  * can be added at runtime via the sysfs new_id mechanism.
  */
@@ -162,19 +161,19 @@ static int pcie_fops_open(struct inode *inode, struct file *filp)
 	/*
 	 * CAP_SYS_RAWIO warning: this driver is a lab/debug tool for
 	 * developers and embedded use.  We warn but do not block access
-	 * without the capability — production systems should not use
+	 * without the capability -- production systems should not use
 	 * this driver at all.
 	 */
 	if (!capable(CAP_SYS_RAWIO))
 		dev_warn_once(&pciedev->pdev->dev,
-			      "opened by process without CAP_SYS_RAWIO — "
+			      "opened by process without CAP_SYS_RAWIO -- "
 			      "not suitable for production use\n");
 
 	/* Take a reference so pciedev outlives this file descriptor */
 	kref_get(&pciedev->refcount);
 	filp->private_data = pciedev;
 
-	/* Pure ioctl device — no read/write/seek fops, mark non-seekable. */
+	/* Pure ioctl device -- no read/write/seek fops, mark non-seekable. */
 	stream_open(inode, filp);
 
 	return 0;
@@ -212,7 +211,7 @@ static int validate_mmio_access(struct pcie_dev *pciedev,
 	 * Valid access sizes: 1, 2, 4 bytes on all architectures.
 	 * 8-byte access (ioread64/iowrite64) is only available on 64-bit
 	 * kernels.  Note: whether 8-byte MMIO results in a single atomic
-	 * PCIe TLP depends on the CPU and platform — x86_64 guarantees
+	 * PCIe TLP depends on the CPU and platform -- x86_64 guarantees
 	 * atomicity, some ARM64 implementations may split into two 32-bit
 	 * accesses.
 	 */
@@ -383,7 +382,7 @@ static const struct file_operations pcie_fops = {
  * asserts it continuously.  For reliable interrupt monitoring, prefer
  * MSI or MSI-X.
  *
- * Monitor with: dmesg -w | grep pcie_stub
+ * Monitor with: dmesg -w | grep -E 'pcie_access|pcie_access_drv'
  * ------------------------------------------------------------------ */
 
 static const char *irq_type_str(struct pci_dev *pdev)
@@ -409,7 +408,7 @@ static irqreturn_t pcie_irq_handler(int irq, void *data)
 			     ctx->vector, irq, count);
 
 	/*
-	 * MSI/MSI-X interrupts are never shared — they're always ours.
+	 * MSI/MSI-X interrupts are never shared -- they're always ours.
 	 * Legacy INTx is shared and we have no device-specific way to
 	 * confirm ownership or acknowledge the interrupt, so return
 	 * IRQ_NONE to let other handlers on the shared line run.
@@ -506,7 +505,7 @@ static int pcie_setup_irqs(struct pcie_dev *pciedev)
 	if (nr_vecs < 0) {
 		dev_info(&pdev->dev,
 			 "Failed to allocate IRQ vectors (mode=%d, rc=%d) "
-			 "— continuing without interrupts\n",
+			 "-- continuing without interrupts\n",
 			 irq_mode, nr_vecs);
 		rc = nr_vecs;
 		goto err_master;
@@ -521,7 +520,7 @@ static int pcie_setup_irqs(struct pcie_dev *pciedev)
 	}
 
 	/*
-	 * Legacy INTx uses a shared interrupt line — IRQF_SHARED is required
+	 * Legacy INTx uses a shared interrupt line -- IRQF_SHARED is required
 	 * so request_irq doesn't fail when another driver already owns the
 	 * IRQ.  MSI/MSI-X are never shared, so flags = 0.
 	 */
@@ -553,7 +552,7 @@ static int pcie_setup_irqs(struct pcie_dev *pciedev)
 	pciedev->nr_irqs = nr_vecs;
 
 	dev_info(&pdev->dev,
-		 "Registered %d %s vector(s)%s — monitor with: dmesg -w\n",
+		 "Registered %d %s vector(s)%s -- monitor with: dmesg -w\n",
 		 nr_vecs, irq_type_str(pdev),
 		 irqflags ? " (shared)" : "");
 
@@ -574,14 +573,14 @@ err_master:
  * resets during hardware evaluation.
  *
  * The recovery flow is:
- *   1. error_detected()  — error reported, I/O may be frozen
- *   2. slot_reset()      — link has been reset (optional, if needed)
- *   3. resume()          — device can resume normal operation
+ *   1. error_detected()  -- error reported, I/O may be frozen
+ *   2. slot_reset()      -- link has been reset (optional, if needed)
+ *   3. resume()          -- device can resume normal operation
  *
  * All events are logged to dmesg for validation.
  * During recovery, ioctls return -EIO (in_error_recovery flag).
  *
- * Monitor with: dmesg -w | grep pcie_stub
+ * Monitor with: dmesg -w | grep -E 'pcie_access|pcie_access_drv'
  * ------------------------------------------------------------------ */
 
 static const char *pci_channel_state_str(pci_channel_state_t state)
@@ -599,12 +598,12 @@ static const char *pci_channel_state_str(pci_channel_state_t state)
 }
 
 /*
- * error_detected — called when the PCI core detects an AER error.
+ * error_detected -- called when the PCI core detects an AER error.
  *
  * state:
- *   pci_channel_io_normal     — correctable error, device still works
- *   pci_channel_io_frozen     — non-fatal uncorrectable, I/O suspended
- *   pci_channel_io_perm_failure — fatal, device is gone
+ *   pci_channel_io_normal     -- correctable error, device still works
+ *   pci_channel_io_frozen     -- non-fatal uncorrectable, I/O suspended
+ *   pci_channel_io_perm_failure -- fatal, device is gone
  */
 static pci_ers_result_t pcie_err_detected(struct pci_dev *pdev,
 					  pci_channel_state_t state)
@@ -612,17 +611,17 @@ static pci_ers_result_t pcie_err_detected(struct pci_dev *pdev,
 	struct pcie_dev *pciedev = pci_get_drvdata(pdev);
 
 	dev_err(&pdev->dev,
-		"AER: error_detected — state=%s (%d)\n",
+		"AER: error_detected -- state=%s (%d)\n",
 		pci_channel_state_str(state), state);
 
 	switch (state) {
 	case pci_channel_io_normal:
-		/* Correctable error — no action needed, just log */
+		/* Correctable error -- no action needed, just log */
 		return PCI_ERS_RESULT_CAN_RECOVER;
 
 	case pci_channel_io_frozen:
 		/*
-		 * Non-fatal uncorrectable error — I/O is frozen.
+		 * Non-fatal uncorrectable error -- I/O is frozen.
 		 * Block ioctls and request a slot reset to recover.
 		 */
 		if (pciedev)
@@ -631,7 +630,7 @@ static pci_ers_result_t pcie_err_detected(struct pci_dev *pdev,
 
 	case pci_channel_io_perm_failure:
 		/*
-		 * Fatal error — device is permanently broken.
+		 * Fatal error -- device is permanently broken.
 		 * Mark as dead so ioctls return -ENODEV.
 		 */
 		if (pciedev) {
@@ -647,7 +646,7 @@ static pci_ers_result_t pcie_err_detected(struct pci_dev *pdev,
 }
 
 /*
- * slot_reset — called after the PCIe link has been reset.
+ * slot_reset -- called after the PCIe link has been reset.
  *
  * This is called after a secondary bus reset (SBR) or function-level
  * reset (FLR).  The device should be re-initialized.  For this generic
@@ -657,7 +656,7 @@ static pci_ers_result_t pcie_err_slot_reset(struct pci_dev *pdev)
 {
 	int rc;
 
-	dev_info(&pdev->dev, "AER: slot_reset — re-enabling device\n");
+	dev_info(&pdev->dev, "AER: slot_reset -- re-enabling device\n");
 
 	/* Restore config space first, then re-enable based on restored state */
 	pci_restore_state(pdev);
@@ -676,14 +675,14 @@ static pci_ers_result_t pcie_err_slot_reset(struct pci_dev *pdev)
 }
 
 /*
- * resume — called when the device can resume normal operation after
+ * resume -- called when the device can resume normal operation after
  * successful error recovery.
  */
 static void pcie_err_resume(struct pci_dev *pdev)
 {
 	struct pcie_dev *pciedev = pci_get_drvdata(pdev);
 
-	dev_info(&pdev->dev, "AER: resume — device recovered\n");
+	dev_info(&pdev->dev, "AER: resume -- device recovered\n");
 
 	if (pciedev)
 		WRITE_ONCE(pciedev->in_error_recovery, false);
@@ -728,12 +727,12 @@ static int pcie_init_pci(struct pcie_dev *pciedev, struct pci_dev *pdev)
 
 		if (!(pci_resource_flags(pdev, i) & IORESOURCE_MEM)) {
 			dev_info(&pdev->dev,
-				 "BAR[%d] is I/O — skipping (len:0x%lx)\n",
+				 "BAR[%d] is I/O -- skipping (len:0x%lx)\n",
 				 i, res_len);
 			continue;
 		}
 
-		/* Claim the region before mapping — provides exclusion */
+		/* Claim the region before mapping -- provides exclusion */
 		rc = pci_request_region(pdev, i, KBUILD_MODNAME);
 		if (rc) {
 			dev_err(&pdev->dev,
@@ -842,6 +841,7 @@ err_free:
 static void pcie_driver_remove(struct pci_dev *pdev)
 {
 	struct pcie_dev *pciedev = pci_get_drvdata(pdev);
+	int i;
 
 	/*
 	 * Mark the device as dead under the write lock.  This waits for
@@ -857,7 +857,7 @@ static void pcie_driver_remove(struct pci_dev *pdev)
 	pcie_teardown_irqs(pciedev);
 
 	/* Release BAR regions claimed during probe */
-	for (int i = 0; i < PCIE_NR_BARS; i++) {
+	for (i = 0; i < PCIE_NR_BARS; i++) {
 		if (pciedev->bars[i].mmio)
 			pci_release_region(pdev, i);
 	}
@@ -883,7 +883,7 @@ static struct pci_driver pcie_access_pci_driver = {
 	/*
 	 * Note: no .suspend/.resume callbacks.  After system suspend (S3/S4),
 	 * MMIO mappings are stale and ioctls will read garbage or fault.
-	 * This is acceptable for a lab/debug tool — reboot or rmmod/insmod
+	 * This is acceptable for a lab/debug tool -- reboot or rmmod/insmod
 	 * to re-initialize after resume.
 	 */
 };
@@ -905,7 +905,7 @@ static int __init pcie_driver_init(void)
 			": targeting PCI device %04x:%04x\n", vid, device_id);
 	} else {
 		pr_info(KBUILD_MODNAME
-			": no vid/device_id specified — use sysfs new_id to bind:\n"
+			": no vid/device_id specified -- use sysfs new_id to bind:\n"
 			"  echo \"VVVV DDDD\" > /sys/bus/pci/drivers/"
 			PCIE_ACCESS_DRIVER "/new_id\n");
 	}
